@@ -194,3 +194,57 @@ def _residual_macroblock(block_fn, filters, repetitions=3, kernel_size=3, stride
         return x
 
     return layer_fn
+
+#%%  Resnet Constructing
+
+def ResNet(input_shape, num_classes=1000, block_fn=_residual_block_basic, repetitions=(2, 2, 2, 2),
+           use_bias=False, kernel_initializer='he_normal', kernel_regularizer=regulizers.l2(1e-4)):
+    """[Build a ResNet model for classification.]
+    
+    Arguments:
+        input_shape {[Tuple]} -- [Input shape (e.g. (224, 224, 3))]
+    
+    Keyword Arguments:
+        num_classes {int} -- [Number of classes to predict] (default: {1000})
+        block_fn {[type]} -- [Block layer method to be used.] (default: {_residual_block_basic})
+        repetitions {tuple} -- [List of repetitions for each macro-blocks the network should contain.] (default: {(2, 2, 2, 2)})
+        use_bias {bool} -- [ Flag to use bias or not in Conv layer.] (default: {False})
+        kernel_initializer {str} -- [Kernel initialisation method name.] (default: {'he_normal'})
+        kernel_regularizer {[type]} -- [Kernel regularizer.] (default: {regulizers.l2(1e-4)})
+    
+    Returns:
+        [keras.model.Model] -- [ResNet model.]
+    """ 
+
+    # Input and 1st layers: Conv with kernel 7x7 and maxpool by 2:
+    inputs = Input(shape=input_shape)
+    conv = _res_conv(
+        filters=64, kernel_size=7, strides=2, use_relu=True, use_bias=use_bias,
+        kernel_initializer=kernel_initializer, kernel_regularizer=kernel_regularizer)(inputs)
+    maxpool = MaxPooling2D(pool_size=3, strides=2, padding='same')(conv)
+
+    # Chain of residual blocks:
+    filters = 64
+    strides = 2
+    res_block = maxpool
+    for i, repet in enumerate(repetitions):
+        # We do not further reduce the input size for the 1st block (max-pool applied just before):
+        block_strides = strides if i != 0 else 1
+        macroblock_name = "block_{}".format(i) 
+        res_block = _residual_macroblock(
+            block_fn=block_fn, repetitions=repet, name=macroblock_name,
+            filters=filters, strides_1st_block=block_strides, use_bias=use_bias,
+            kernel_initializer=kernel_initializer, kernel_regularizer=kernel_regularizer)(res_block)
+        filters = min(filters * 2, 1024) # we limit to 1024 filters max
+
+    # Final layers for prediction:
+    res_spatial_dim = tf.keras.backend.int_shape(res_block)[1:3]
+    avg_pool = AveragePooling2D(pool_size=res_spatial_dim, strides=1)(res_block)
+    flatten = Flatten()(avg_pool)
+    predictions = Dense(units=num_classes, kernel_initializer=kernel_initializer, 
+                        activation='softmax')(flatten)
+
+    # Model:
+    model = Model(inputs=inputs, outputs=predictions)
+    return model
+
